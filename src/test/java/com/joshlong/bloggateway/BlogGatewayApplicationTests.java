@@ -13,7 +13,7 @@ class BlogGatewayApplicationTests {
     }
 
     @Test
-    void springIoBlogPost() {
+    void contentfulBlogPost() {
 
     }
 
@@ -23,3 +23,4 @@ class BlogGatewayApplicationTests {
 
 
 record BlogPost (String title, String author, Instant published , Instant scheduled){}
+
