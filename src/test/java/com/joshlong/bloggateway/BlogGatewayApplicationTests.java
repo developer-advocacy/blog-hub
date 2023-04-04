@@ -22,76 +22,110 @@ import java.util.function.Predicate;
 @Slf4j
 class BlogGatewayApplicationTests {
 
-    private final String personalAccessToken = ConfigUtils.personalAccessToken();
-    private final String authorId = ConfigUtils.authorId();
-    private final String spaceId = ConfigUtils.spaceId();
+    private final ContentfulClient client;
 
-    private static WebClient buildWebClient(WebClient.Builder builder, String spaceId,
-                                            String environment,
-                                            String accessToken) {
-        return builder
-                .baseUrl("https://api.contentful.com/spaces/" + spaceId + "/environments/" + environment +
-                         "/entries/")
-                .defaultHeader(HttpHeaders.AUTHORIZATION, "Bearer " + accessToken)
-                .defaultHeader(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_JSON_VALUE)
-                .build();
+    BlogGatewayApplicationTests() {
+        var personalAccessToken = ConfigUtils.personalAccessToken();
+        var spaceId = ConfigUtils.spaceId();
+        var environment = "testing";
+        var contentfulConfiguration = new ContentfulConfiguration();
+        var objectMapper = contentfulConfiguration.objectMapper();
+        var builder = contentfulConfiguration.webClientBuilder();
+        var webClient = contentfulConfiguration.webClient(builder, spaceId, environment, personalAccessToken);
+        this.client = contentfulConfiguration.contentfulClient(objectMapper, webClient);
     }
 
-    @Deprecated
-    private static Mono<String> post(WebClient webClient, String authorId,
-                                     String title, String body) {
-
-        var requestBody = "{\n"
-                          + "  \"fields\": {\n"
-                          + "    \"title\": {\n"
-                          + "      \"en-US\": \"" + title + "\"\n"
-                          + "    },\n"
-                          + "    \"body\": {\n"
-                          + "      \"en-US\": \"" + body + "\"\n"
-                          + "    },\n"
-                          + "    \"author\": {\n"
-                          + "      \"en-US\": {\n"
-                          + "        \"sys\": {\n"
-                          + "          \"type\": \"Link\",\n"
-                          + "          \"linkType\": \"Entry\",\n"
-                          + "          \"id\": \"" + authorId + "\"\n"
-                          + "        }\n"
-                          + "      }\n"
-                          + "    },\n"
-                          + "    \"slug\": {\n"
-                          + "      \"en-US\": \"title-that-is-hyphenated\"\n"
-                          + "    },\n"
-                          + "    \"category\": {\n"
-                          + "      \"en-US\": \"Engineering\"\n"
-                          + "    }\n"
-                          + "  }\n"
-                          + "}";
-
-
-        return webClient.post()
-                .body(BodyInserters.fromValue(requestBody))
-                .header("X-Contentful-Content-Type", "blogPost")
-                .retrieve()
-                .bodyToMono(String.class);
+    @Test
+    void contentful() throws Exception {
+        var body = """
+                    ## Hello World
+                    Now is the time for [a link](https://spring.io/blog).
+                """;
+        var num = System.currentTimeMillis();
+        var blogPost = new BlogPost(new Author(ConfigUtils.authorId()), "this is an OOP title [" + num + "]", "Engineering", body);
+        client.createDraft(blogPost).subscribe(post -> log.info(System.lineSeparator() + "==========" + System.lineSeparator() + post + System.lineSeparator() + "=========="));
+        Thread.sleep(5 * 1000);
     }
 
-    private static Mono<String> ooPost(ObjectMapper objectMapper, WebClient webClient, BlogPost post) {
-
-        var requestBody = "{ " + post.toJsonNode(objectMapper).toPrettyString() +
-                          "}";
-        return webClient.post()
-                .body(BodyInserters.fromValue(requestBody))
-                .header("X-Contentful-Content-Type", "blogPost")
-                .retrieve()
-                .bodyToMono(String.class);
+    @Test
+    void blogPostToJson() {
+        var objectMapper = new ObjectMapper();
+        var num = System.currentTimeMillis();
+        var title = "this is a title #" + num;
+        var bp = new BlogPost(new Author("test"), title, "Engineering", "Hello, world!");
+        var jsonNode = bp.toJsonNode(objectMapper);
+        Assertions.assertEquals(jsonNode.get("fields").get("author").get("en-US").get("sys").get("id").textValue(), "test");
+        Assertions.assertEquals(jsonNode.get("fields").get("title").get("en-US").textValue(), title);
     }
 
-    private static String hyphenateTitle(String title) {
+}
+
+@Slf4j
+class DefaultContentfulClient implements ContentfulClient {
+
+    private final WebClient webClient;
+    private final ObjectMapper objectMapper;
+
+    DefaultContentfulClient(ObjectMapper objectMapper, WebClient webClient) {
+        this.webClient = webClient;
+        this.objectMapper = objectMapper;
+    }
+
+    @Override
+    public Mono<BlogPostDraft> createDraft(BlogPost blogPost) {
+        var requestBody = blogPost.toJsonNode(this.objectMapper).toPrettyString();
+        return this.webClient//
+                .post()//
+                .body(BodyInserters.fromValue(requestBody))//
+                .header("X-Contentful-Content-Type", "blogPost")//
+                .retrieve()//
+                .bodyToMono(JsonNode.class)//
+                .mapNotNull(root -> {
+                    var id = root.get("sys").get("id").asText();
+                    return new BlogPostDraft(id, blogPost);
+                });
+
+    }
+
+
+}
+
+record BlogPostDraft(String draftId, BlogPost post) {
+}
+
+class ContentfulConfiguration {
+
+
+    WebClient.Builder webClientBuilder() {
+        return WebClient.builder();
+    }
+
+    ObjectMapper objectMapper() {
+        return new ObjectMapper();
+    }
+
+    ContentfulClient contentfulClient(ObjectMapper objectMapper, WebClient webClient) {
+        return new DefaultContentfulClient(objectMapper, webClient);
+    }
+
+    WebClient webClient(WebClient.Builder builder, String spaceId, String environment, String accessToken) {
+        return builder.baseUrl("https://api.contentful.com/spaces/" + spaceId + "/environments/" + environment + "/entries/").defaultHeader(HttpHeaders.AUTHORIZATION, "Bearer " + accessToken).defaultHeader(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_JSON_VALUE).build();
+    }
+}
+
+interface ContentfulClient {
+
+    Mono<BlogPostDraft> createDraft(BlogPost blogPost);
+}
+
+record BlogPost(Author author, String title, String category, String body) {
+
+    public String slug() {
         var sb = new StringBuffer();
         var replacements = new HashMap<Predicate<Character>, Function<Character, String>>();
         replacements.put(Character::isWhitespace, c -> "-");
-        replacements.put(c -> Character.isAlphabetic(c) || Character.isDigit(c), c -> (Character.toString(c)).toLowerCase(Locale.getDefault()));
-        for (var c : title.toCharArray()) {
+        replacements.put(c -> Character.isAlphabetic(c) || Character.isDigit(c), c -> Character.toString(c).toLowerCase(Locale.getDefault()));
+        for (var c : this.title().toCharArray()) {
             for (var test : replacements.keySet())
                 if (test.test(c))
                     sb.append(replacements.get(test).apply(c));
@@ -99,74 +133,27 @@ class BlogGatewayApplicationTests {
         return sb.toString();
     }
 
-    @Test
-    void hyphenate() {
-        var hyphenatedTitle = hyphenateTitle("Hyphenate!!! ...It's gonna be all riiight... Hyphenate!");
-        Assertions.assertEquals("hyphenate-its-gonna-be-all-riiight-hyphenate", hyphenatedTitle);
-    }
-
-    @Test
-    void contentful1() throws Exception {
-
-        var om = new ObjectMapper();
-        var webClienBuilder = WebClient.builder();
-        var client = buildWebClient(webClienBuilder, this.spaceId, "testing",
-                this.personalAccessToken);
-        var body = """
-                                
-                ## Hello World
-                        
-                Now is the time for [a link](https://spring.io/blog).
-                """;
-        var body2 = "Hello, world! ";
-        var response = ooPost(om, client, new BlogPost(new Author(this.authorId), "this is an OOP title",
-                "Engineering", "this-is-an-oop-slug", body));
-        response.subscribe(response1 -> System.out.println("got a response! " + response1));
-        Thread.sleep(5 * 1000);
-
-
-    }
-
-
-    @Test
-    void blogPostToJson() {
-        var objectMapper = new ObjectMapper();
-        var num = System.currentTimeMillis();
-        var bp = new BlogPost(new Author(this.authorId),
-                "this is a title # " + num, "Engineering", "this-is-a-title", "Hello, world!");
-        var jsonNode = bp.toJsonNode(objectMapper);
-        Assertions.assertEquals(jsonNode.get("author").get("en-US").get("sys").get("id").textValue(),
-                "author-id");
-    }
-
-}
-
-
-record BlogPost(Author author,
-                String title, String category, String slug, String body) {
-
     @SneakyThrows
     public JsonNode toJsonNode(ObjectMapper objectMapper) {
-
         var ow = objectMapper.createObjectNode();
         ow.put("category", singleFieldObjectNode(objectMapper, this.category));
         ow.put("title", singleFieldObjectNode(objectMapper, this.title));
         ow.put("title", singleFieldObjectNode(objectMapper, this.title));
-        ow.put("slug", singleFieldObjectNode(objectMapper, this.slug));
+        ow.put("slug", singleFieldObjectNode(objectMapper, this.slug()));
         ow.put("body", singleFieldObjectNode(objectMapper, this.body));
         var sys = Map.of("sys", Map.of("type", "Link", "linkType", "Entry", "id", this.author.id()));
         var enUs = Map.of("en-US", sys);
         var jsonForAuthor = objectMapper.writeValueAsString(enUs);
         ow.put("author", objectMapper.readTree(jsonForAuthor));
-        return ow;
+        var fields = objectMapper.createObjectNode();
+        fields.put("fields", ow);
+        return fields;
     }
 
-    private ObjectNode singleFieldObjectNode(ObjectMapper objectMapper,
-                                             String value) {
+    private ObjectNode singleFieldObjectNode(ObjectMapper objectMapper, String value) {
         var categoryON = objectMapper.createObjectNode();
         categoryON.put("en-US", value);
         return categoryON;
-
     }
 }
 
