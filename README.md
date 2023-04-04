@@ -11,7 +11,7 @@ Here's how you'd publish a blog, given a key:
 ```shell
 curl --include \
      --request POST \
-     --header 'Authorization: Bearer $YOUR_PERSONAL_ACCESS_TOKEN' \
+     --header 'Authorization: Bearer $PERSONAL_ACCESS_TOKEN' \
      --header 'Content-Type: application/vnd.contentful.management.v1+json' \
      --header 'X-Contentful-Content-Type: blogPost' \
      --data-binary '{
