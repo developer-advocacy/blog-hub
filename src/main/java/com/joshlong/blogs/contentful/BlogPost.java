@@ -11,7 +11,7 @@ import java.util.Map;
 import java.util.function.Function;
 import java.util.function.Predicate;
 
-public record BlogPost(Author author, String title, String category, String body) {
+record BlogPost(Author author, String title, String category, String body) {
 
     public String slug() {
         var stringBuffer = new StringBuffer();
