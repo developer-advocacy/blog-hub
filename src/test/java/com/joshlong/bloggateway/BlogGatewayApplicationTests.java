@@ -1,5 +1,9 @@
 package com.joshlong.bloggateway;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
+import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
@@ -9,10 +13,9 @@ import org.springframework.web.reactive.function.BodyInserters;
 import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Mono;
 
-import java.time.Instant;
 import java.util.HashMap;
 import java.util.Locale;
-import java.util.function.Consumer;
+import java.util.Map;
 import java.util.function.Function;
 import java.util.function.Predicate;
 
@@ -34,6 +37,7 @@ class BlogGatewayApplicationTests {
                 .build();
     }
 
+    @Deprecated
     private static Mono<String> post(WebClient webClient, String authorId,
                                      String title, String body) {
 
@@ -62,6 +66,19 @@ class BlogGatewayApplicationTests {
                           + "    }\n"
                           + "  }\n"
                           + "}";
+
+
+        return webClient.post()
+                .body(BodyInserters.fromValue(requestBody))
+                .header("X-Contentful-Content-Type", "blogPost")
+                .retrieve()
+                .bodyToMono(String.class);
+    }
+
+    private static Mono<String> ooPost(ObjectMapper objectMapper, WebClient webClient, BlogPost post) {
+
+        var requestBody = "{ " + post.toJsonNode(objectMapper).toPrettyString() +
+                          "}";
         return webClient.post()
                 .body(BodyInserters.fromValue(requestBody))
                 .header("X-Contentful-Content-Type", "blogPost")
@@ -89,8 +106,9 @@ class BlogGatewayApplicationTests {
     }
 
     @Test
-    void joshlongDotComBlogPost() throws Exception {
+    void contentful1() throws Exception {
 
+        var om = new ObjectMapper();
         var webClienBuilder = WebClient.builder();
         var client = buildWebClient(webClienBuilder, this.spaceId, "testing",
                 this.personalAccessToken);
@@ -101,56 +119,57 @@ class BlogGatewayApplicationTests {
                 Now is the time for [a link](https://spring.io/blog).
                 """;
         var body2 = "Hello, world! ";
-        var response = post(client, this.authorId, "a simple title", body2);
-        response.subscribe(new Consumer<String>() {
-            @Override
-            public void accept(String response) {
-                System.out.println("got a response! " + response);
-            }
-        });
-
-        Thread.sleep(10 * 1000);
+        var response = ooPost(om, client, new BlogPost(new Author(this.authorId), "this is an OOP title",
+                "Engineering", "this-is-an-oop-slug", body));
+        response.subscribe(response1 -> System.out.println("got a response! " + response1));
+        Thread.sleep(5 * 1000);
 
 
-
-        /*curl --include \
-     --request POST \
-     --header 'Authorization: Bearer $YOUR_PERSONAL_ACCESS_TOKEN' \
-     --header 'Content-Type: application/vnd.contentful.management.v1+json' \
-     --header 'X-Contentful-Content-Type: blogPost' \
-     --data-binary '{
-       "fields": {
-         "title": {
-           "en-US": "Test Title"
-         },
-         "body": {
-           "en-US": "Your blog body"
-         },
-         "author": {
-           "en-US": {
-              "sys": {
-              "type": "Link",
-              "linkType": "Entry",
-              "id": "$AUTHOR_ID"
-            }
-          }
-         },
-         "slug": {
-           "en-US": "title-that-is-hyphenated"
-         },
-         "category": {
-           "en-US": "Your category (either News/Engineering/Releases)"
-         }
-       }
-     }' \
-     https://api.contentful.com/spaces/$SPACEID/environments/testing/entries/
-*/
     }
 
 
+    @Test
+    void blogPostToJson() {
+        var objectMapper = new ObjectMapper();
+        var num = System.currentTimeMillis();
+        var bp = new BlogPost(new Author(this.authorId),
+                "this is a title # " + num, "Engineering", "this-is-a-title", "Hello, world!");
+        var jsonNode = bp.toJsonNode(objectMapper);
+        Assertions.assertEquals(jsonNode.get("author").get("en-US").get("sys").get("id").textValue(),
+                "author-id");
+    }
+
 }
 
 
-record BlogPost(String title, String author, Instant published, Instant scheduled) {
+record BlogPost(Author author,
+                String title, String category, String slug, String body) {
+
+    @SneakyThrows
+    public JsonNode toJsonNode(ObjectMapper objectMapper) {
+
+        var ow = objectMapper.createObjectNode();
+        ow.put("category", singleFieldObjectNode(objectMapper, this.category));
+        ow.put("title", singleFieldObjectNode(objectMapper, this.title));
+        ow.put("title", singleFieldObjectNode(objectMapper, this.title));
+        ow.put("slug", singleFieldObjectNode(objectMapper, this.slug));
+        ow.put("body", singleFieldObjectNode(objectMapper, this.body));
+        var sys = Map.of("sys", Map.of("type", "Link", "linkType", "Entry", "id", this.author.id()));
+        var enUs = Map.of("en-US", sys);
+        var jsonForAuthor = objectMapper.writeValueAsString(enUs);
+        ow.put("author", objectMapper.readTree(jsonForAuthor));
+        return ow;
+    }
+
+    private ObjectNode singleFieldObjectNode(ObjectMapper objectMapper,
+                                             String value) {
+        var categoryON = objectMapper.createObjectNode();
+        categoryON.put("en-US", value);
+        return categoryON;
+
+    }
 }
 
+
+record Author(String id) {
+}
